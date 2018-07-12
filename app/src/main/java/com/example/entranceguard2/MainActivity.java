@@ -1,107 +1,294 @@
 package com.example.entranceguard2;
 
 
+
 import android.annotation.SuppressLint;
+import android.app.ActionBar;
 import android.graphics.ImageFormat;
-import android.graphics.Rect;
-import android.graphics.YuvImage;
 import android.hardware.Camera;
+import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
+import android.media.MediaFormat;
 import android.os.Build;
+import android.os.Environment;
+import android.support.annotation.Nullable;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.Size;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import android.view.Window;
-import android.view.WindowManager;
+import android.view.ViewGroup;
 
 import org.java_websocket.client.WebSocketClient;
-import org.java_websocket.drafts.Draft_10;
 import org.java_websocket.handshake.ServerHandshake;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.net.Socket;
 import java.net.URI;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.net.URISyntaxException;
+import java.nio.ByteBuffer;
+import java.util.List;
 
-public class MainActivity extends AppCompatActivity implements Camera.PreviewCallback{
-    private String ipname = null;
-    private SurfaceView sView;
+
+public class MainActivity extends AppCompatActivity implements SurfaceHolder.Callback, Camera.PreviewCallback {
+
+    // WebSocket
+    private WebSocketClient mWebSocketClient = null;
+    private String address = "ws://192.168.0.117:21085/echo";
+    private URI uri;
+    private static final String TAG = "Entrance Guard";
+
+    // Camera
+    private SurfaceView surfaceview;
     private SurfaceHolder surfaceHolder;
-    private int screenWidth, screenHeight;
     private Camera camera; // 定义系统所用的照相机
-    private boolean isPreview = false; // 是否在浏览中
+    private Camera.Parameters parameters;
 
-    //存储YUV数据
-    private static int yuvqueuesize = 10;
-    public static ArrayBlockingQueue<byte[]> YUVQueue = new ArrayBlockingQueue<byte[]>(yuvqueuesize);
-    private AvcEncoder avcCodec;
-    int framerate = 30;
-    int biterate = 8500*1000;
+    //    // 帧率
+//    private int width = 640;
+//    private int height = 480;
+    private int width = 1280;
+    private int height = 720;
+
+    // 帧率
+    private int framerate = 24;
+    // 比特率
+    private int biterate = width * height * 3;
+
+    // WebSocket线程
+    Thread wsThread;
+
+    private MediaCodec mediaCodec;
+    private final int TIMEOUT_USEC = 12000;
+
+    private BufferedOutputStream outputStream;
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 设置全屏
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setContentView(R.layout.activity_main);
 
-        screenWidth = 640;
-        screenHeight = 480;
-        sView = (SurfaceView) findViewById(R.id.sView); // 获取界面中SurfaceView组件
-        surfaceHolder = sView.getHolder(); // 获得SurfaceView的SurfaceHolder
+        createfile();
 
-        // 为surfaceHolder添加一个回调监听器
-        surfaceHolder.addCallback(new SurfaceHolder.Callback() {
-            @Override
-            public void surfaceChanged(SurfaceHolder holder, int format,
-                                       int width, int height) {
-            }
+        initSockect();
+        initSurfaceView();
 
-            @Override
-            public void surfaceCreated(SurfaceHolder holder) {
-
-                initCamera(); // 打开摄像头
-                avcCodec = new AvcEncoder(screenWidth,screenHeight,framerate,biterate);//编码类的初始化
-                avcCodec.StartEncoderThread();
-            }
-
-            @Override
-            public void surfaceDestroyed(SurfaceHolder holder) {
-                // 如果camera不为null ,释放摄像头
-                if (camera != null) {
-                    camera.setPreviewCallback(null);
-                    if (isPreview)
-                        camera.stopPreview();
-                    camera.release();
-                    camera = null;
-                    avcCodec.StopThread();
-                }
-                System.exit(0);
-            }
-        });
-        // 设置该SurfaceView自己不维护缓冲
-        surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
-
-        //不支持H264编码
-        if( ! SupportAvcCodec()){
+        if (!SupportAvcCodec()) {
+            Log.e(TAG, "不支持编码");
             onDestroy();
         }
 
+//        DisplayMetrics dm =getResources().getDisplayMetrics();
+//        int w_screen = dm.widthPixels;//800
+//        int h_screen = dm.heightPixels;//1232
+//        int i = 0;
+    }
+
+    private static String path = Environment.getExternalStorageDirectory().getAbsolutePath() + "/test3.yuv";
+
+    // 生成视频文件，保存本地
+    private void createfile(){
+        File file = new File(path);
+        if(file.exists()){
+            file.delete();
+        }
+        try {
+            outputStream = new BufferedOutputStream(new FileOutputStream(file));
+        } catch (Exception e){
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder surfaceHolder) {
+        initCamera();
+        initMediaCodec();
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder surfaceHolder, int i, int i1, int i2) {
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder surfaceHolder) {
+//        Log.d("11111","11111");
+        if (null != camera) {
+            camera.setPreviewCallback(null);
+            camera.stopPreview();
+            camera.release();
+            camera = null;
+            mWebSocketClient.close();
+
+            try {
+                outputStream.close();
+            }catch (Exception e){
+                e.printStackTrace();
+            }
+        }
     }
 
     @SuppressLint("NewApi")
-    private boolean SupportAvcCodec(){
-        if(Build.VERSION.SDK_INT>=18){
-            for(int j = MediaCodecList.getCodecCount() - 1; j >= 0; j--){
+    @Override
+    public void onPreviewFrame(final byte[] bytes, Camera camera) {
+        wsThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+
+                byte[] input = bytes;
+                byte[] yuv420sp = new byte[width * height * 3/2];
+                NV21ToNV12(input, yuv420sp, width, height);
+                input = yuv420sp;
+
+                byte[] temp = new byte[width * height * 3/2];
+                temp = yuv420sp;
+                try {
+                    outputStream.write(bytes, 0, yuv420sp.length);//将输出的h264数据保存为文件，用vlc就可以播放
+                }catch (Exception e){
+                    e.printStackTrace();
+                }
+
+                if (input != null && mediaCodec != null) {
+                    try {
+                        ByteBuffer[] inputBuffers = mediaCodec.getInputBuffers();//拿到输入缓冲区,用于传送数据进行编码
+                        ByteBuffer[] outputBuffers = mediaCodec.getOutputBuffers();//拿到输出缓冲区,用于取到编码后的数据
+                        int inputBufferIndex = mediaCodec.dequeueInputBuffer(-1);
+                        if (inputBufferIndex >= 0) {//当输入缓冲区有效时,就是>=0
+                            ByteBuffer inputBuffer = inputBuffers[inputBufferIndex];
+                            inputBuffer.clear();
+                            inputBuffer.put(input);//往输入缓冲区写入数据,
+                            //                    //五个参数，第一个是输入缓冲区的索引，第二个数据是输入缓冲区起始索引，第三个是放入的数据大小，第四个是时间戳，保证递增就是
+                            mediaCodec.queueInputBuffer(inputBufferIndex, 0, input.length, System.nanoTime() / 1000, 0);
+
+                        }
+
+                        MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
+                        int outputBufferIndex = mediaCodec.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC);//拿到输出缓冲区的索引
+                        while (outputBufferIndex >= 0) {
+                            ByteBuffer outputBuffer = outputBuffers[outputBufferIndex];
+                            byte[] outData = new byte[bufferInfo.size];
+                            outputBuffer.get(outData);
+                            //outData就是输出的h264数据
+//                            mWebSocketClient.send(bytes);
+//                            Log.d("byte_size:",String.valueOf(bytes.length));
+//                            outputStream.write(outData, 0, outData.length);//将输出的h264数据保存为文件，用vlc就可以播放
+
+                            mediaCodec.releaseOutputBuffer(outputBufferIndex, false);
+                            outputBufferIndex = mediaCodec.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC);
+                        }
+
+                    } catch (Throwable t) {
+                        t.printStackTrace();
+                    }
+                }
+            }
+        });
+        wsThread.start();
+    }
+
+
+    private void initSurfaceView() {
+        surfaceview = (SurfaceView) findViewById(R.id.sView);
+        surfaceHolder = surfaceview.getHolder();
+        surfaceHolder.addCallback(this);
+    }
+
+    private void initCamera() {
+        try {
+            camera = Camera.open(Camera.getNumberOfCameras() > 1 ? 1 : 0);
+        } catch (Exception e) {
+            Log.d("camera open error.","open error");
+            e.printStackTrace();
+        }
+
+        if (camera != null) {
+            try {
+                camera.setPreviewCallback(this);
+                camera.setDisplayOrientation(90);
+                if (parameters == null) {
+                    parameters = camera.getParameters();
+                }
+                parameters.setPreviewFormat(ImageFormat.NV21);
+//                parameters.setPreviewFormat(ImageFormat.YV12);
+                parameters.setPreviewSize(width, height);
+                parameters.setPreviewFrameRate(framerate); // 设置帧率
+                camera.setParameters(parameters);
+                if (null != surfaceHolder) {
+                    camera.setPreviewDisplay(surfaceHolder);
+                }
+                camera.startPreview();
+//                camera.autoFocus(null); // 自动对焦
+            } catch (IOException e) {
+                Log.d("camera set params error","set params error");
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void initSockect() {
+        try {
+            uri = new URI(address);
+        } catch (URISyntaxException e) {
+            e.printStackTrace();
+        }
+        if (null == mWebSocketClient) {
+            mWebSocketClient = new WebSocketClient(uri) {
+                @Override
+                public void onOpen(ServerHandshake serverHandshake) {
+                    Log.i(TAG, "onOpen: ");
+//                    mWebSocketClient.send("---------------ws-opened---------------");
+//                    mWebSocketClient.send("hello rzq");
+                }
+
+                @Override
+                public void onMessage(String s) {
+                    Log.i(TAG, "onMessage: " + s);
+                }
+
+                @Override
+                public void onClose(int i, String s, boolean b) {
+                    Log.i(TAG, "onClose: ");
+                }
+
+                @Override
+                public void onError(Exception e) {
+                    Log.i(TAG, "onError: ");
+                }
+            };
+            mWebSocketClient.connect();
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private void initMediaCodec() {
+        MediaFormat mediaFormat = MediaFormat.createVideoFormat("video/avc", width, height);
+        int format = MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar;
+//        int format = MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar;
+        if( format != 0 ){
+            mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, format);
+
+        }
+        mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, biterate);
+        mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, framerate);
+        mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+        try {
+            mediaCodec = MediaCodec.createEncoderByType("video/avc");
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+//        final Surface inputSurface = mediaCodec.createInputSurface();
+        mediaCodec.start();
+    }
+
+    private boolean SupportAvcCodec() {
+        if (Build.VERSION.SDK_INT >= 18) {
+            for (int j = MediaCodecList.getCodecCount() - 1; j >= 0; j--) {
                 MediaCodecInfo codecInfo = MediaCodecList.getCodecInfoAt(j);
 
                 String[] types = codecInfo.getSupportedTypes();
@@ -110,207 +297,27 @@ public class MainActivity extends AppCompatActivity implements Camera.PreviewCal
                         return true;
                     }
                 }
+
             }
         }
         return false;
     }
 
-    private void initCamera() {
-        if (!isPreview) {
-            camera = Camera.open(1);
+    private void NV21ToNV12(byte[] nv21,byte[] nv12,int width,int height){
+        if(nv21 == null || nv12 == null)return;
+        int framesize = width*height;
+        int i = 0,j = 0;
+        System.arraycopy(nv21, 0, nv12, 0, framesize);
+        for(i = 0; i < framesize; i++){
+            nv12[i] = nv21[i];
         }
-        if (camera != null && !isPreview) {
-            try {
-                Camera.Parameters parameters = camera.getParameters();
-                parameters.setPreviewSize(screenWidth, screenHeight); // 设置预览照片的大小
-                parameters.setPreviewFpsRange(20, 30); // 每秒显示20~30帧
-                parameters.setPictureFormat(ImageFormat.NV21); // 设置图片格式
-                parameters.setPictureSize(screenWidth, screenHeight); // 设置照片的大小
-                // camera.setParameters(parameters); // android2.3.3以后不需要此行代码
-                camera.setDisplayOrientation(90);//旋转90°
-                camera.setPreviewDisplay(surfaceHolder); // 通过SurfaceView显示取景画面
-//                camera.setPreviewCallback(new StreamIt(ipname)); // 设置回调的类
-                camera.setPreviewCallback(this);
-                camera.startPreview(); // 开始预览
-                camera.autoFocus(null); // 自动对焦
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-            isPreview = true;
+        for (j = 0; j < framesize/2; j+=2)
+        {
+            nv12[framesize + j-1] = nv21[j+framesize];
+        }
+        for (j = 0; j < framesize/2; j+=2)
+        {
+            nv12[framesize + j] = nv21[j+framesize-1];
         }
     }
-    public void onPreviewFrame(byte[] data, Camera camera) {
-        if (YUVQueue.size() >= 10) {
-            YUVQueue.poll();
-        }
-        YUVQueue.add(data);
-
-//        Camera.Size size = camera.getParameters().getPreviewSize();
-//        try {
-//            // 调用image.compressToJpeg（）将YUV格式图像数据data转为jpg格式
-//            YuvImage image = new YuvImage(data, ImageFormat.NV21, size.width,
-//                    size.height, null);//YUV420P和NV21两种格式
-//            if (image != null) {
-//                ByteArrayOutputStream outstream = new ByteArrayOutputStream();
-//                image.compressToJpeg(new Rect(0, 0, size.width, size.height),
-//                        80, outstream);
-//                outstream.flush();
-//                // 启用线程将图像数据发送出去
-////                Thread th = new MyThread(outstream, ipname);
-////                th.start();
-//            }
-//        } catch (Exception ex) {
-//            Log.e("Sys", "Error:" + ex.getMessage());
-//        }
-    }
-}
-
-//class StreamIt implements Camera.PreviewCallback {
-//    private String ipname;
-//
-//    public StreamIt(String ipname) {
-//        this.ipname = ipname;
-//    }
-//
-//    @Override
-//    public void onPreviewFrame(byte[] data, Camera camera) {
-//        if (YUVQueue.size() >= 10) {
-//            YUVQueue.poll();
-//        }
-//        YUVQueue.add(buffer);
-//
-//        Camera.Size size = camera.getParameters().getPreviewSize();
-//        try {
-//            // 调用image.compressToJpeg（）将YUV格式图像数据data转为jpg格式
-//            YuvImage image = new YuvImage(data, ImageFormat.NV21, size.width,
-//                    size.height, null);//YUV420P和NV21两种格式
-//            if (image != null) {
-//                ByteArrayOutputStream outstream = new ByteArrayOutputStream();
-//                image.compressToJpeg(new Rect(0, 0, size.width, size.height),
-//                        80, outstream);
-//                outstream.flush();
-////                // 启用线程将图像数据发送出去
-//                Thread th = new MyThread(outstream, ipname);
-//                th.start();
-//            }
-//        } catch (Exception ex) {
-//            Log.e("Sys", "Error:" + ex.getMessage());
-//        }
-//    }
-//}
-
-class MyThread2 extends Thread{
-    public MyThread2(){
-    }
-    public void run() {
-        try {
-
-            WebSocketClient mSocketClient = new WebSocketClient(new URI("ws://172.20.10.2:21085/echo"), new Draft_10()) {
-                @Override
-                public void onOpen(ServerHandshake handshakedata) {
-                    Log.d("picher_log", "打开通道" + handshakedata.getHttpStatus());
-                }
-
-                @Override
-                public void onMessage(String message) {
-                    Log.d("picher_log", "接收消息" + message);
-                }
-
-                @Override
-                public void onClose(int code, String reason, boolean remote) {
-                    Log.d("picher_log", "通道关闭");
-                }
-
-                @Override
-                public void onError(Exception ex) {
-                    Log.d("picher_log", "链接错误");
-                }
-            };
-            mSocketClient.connect();
-//            byte[] buf = myoutputstream.toByteArray();
-            Log.d("111","11111");
-            mSocketClient.send("1");
-            Log.d("222","22222");
-//            mSocketClient.close();
-////            // 将图像数据通过Socket发送出去
-//            Socket tempSocket = new Socket("ws://172.20.10.2:21085/echo", 6000);
-//            outsocket = tempSocket.getOutputStream();
-//            ByteArrayInputStream inputstream = new ByteArrayInputStream(
-//                    myoutputstream.toByteArray());
-//            int amount;
-//            while ((amount = inputstream.read(byteBuffer)) != -1) {
-//                outsocket.write(byteBuffer, 0, amount);
-//            }
-//            myoutputstream.flush();
-//            myoutputstream.close();
-//            tempSocket.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-}
-class MyThread extends Thread {
-    private byte byteBuffer[] = new byte[1024];
-    private OutputStream outsocket;
-    private ByteArrayOutputStream myoutputstream;
-    private String ipname;
-//    private WebSocketClient mSocketClient
-
-    public MyThread(ByteArrayOutputStream myoutputstream, String ipname) {
-        this.myoutputstream = myoutputstream;
-        this.ipname = ipname;
-        try {
-            myoutputstream.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    public void run() {
-        try {
-
-            WebSocketClient mSocketClient = new WebSocketClient(new URI("ws://172.20.10.2:21085/echo"), new Draft_10()) {
-                @Override
-                public void onOpen(ServerHandshake handshakedata) {
-                    Log.d("picher_log", "打开通道" + handshakedata.getHttpStatus());
-                }
-
-                @Override
-                public void onMessage(String message) {
-                    Log.d("picher_log", "接收消息" + message);
-                }
-
-                @Override
-                public void onClose(int code, String reason, boolean remote) {
-                    Log.d("picher_log", "通道关闭");
-                }
-
-                @Override
-                public void onError(Exception ex) {
-                    Log.d("picher_log", "链接错误");
-                }
-            };
-            mSocketClient.connect();
-            byte[] buf = myoutputstream.toByteArray();
-            Log.d("111","11111");
-            mSocketClient.send("1");
-            Log.d("222","22222");
-//            mSocketClient.close();
-////            // 将图像数据通过Socket发送出去
-//            Socket tempSocket = new Socket("ws://172.20.10.2:21085/echo", 6000);
-//            outsocket = tempSocket.getOutputStream();
-//            ByteArrayInputStream inputstream = new ByteArrayInputStream(
-//                    myoutputstream.toByteArray());
-//            int amount;
-//            while ((amount = inputstream.read(byteBuffer)) != -1) {
-//                outsocket.write(byteBuffer, 0, amount);
-//            }
-//            myoutputstream.flush();
-//            myoutputstream.close();
-//            tempSocket.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
 }
