@@ -27,10 +27,19 @@
         <!--android:text="你好"/>-->
     <SurfaceView
         android:id="@+id/sView"
-        android:layout_width="fill_parent"
-        android:layout_height="fill_parent"
+        android:layout_width="1280dp"
+        android:layout_height="720dp"
         android:scaleType="fitCenter"
         />
+    <TextView
+        android:id="@+id/textView"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="vertical"
+        android:singleLine="false"
+        android:maxLines="15"
+        android:textColor="#FF0000"
+    />
     <!--<ImageView-->
         <!--android:id="@+id/image"-->
         <!--android:layout_width="match_parent"-->
