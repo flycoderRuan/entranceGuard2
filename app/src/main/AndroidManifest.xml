@@ -2,22 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.entranceguard2">
 
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <!-- 拍照相关 -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
+    <uses-feature android:name="android.hardware.camera" />
+    <uses-feature android:name="android.hardware.camera.autofocus" />
+
+    <!-- 网络相关 -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <uses-permission android:name="android.permission.CAMERA" />
-    <!--存储权限                    SD卡读写权限 -->
+
+    <!--存储权限 SD卡读写权限 -->
     <uses-permission android:name="android.permission.MOUNT_UNMOUNT_FILESYSTEMS" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-    <!--Camera Feature 声明对camera feature的使用 -->
-    <uses-feature android:name="android.hardware.camera" />
-    <uses-feature
-        android:name="android.hardware.camera.autofocus"
-        android:required="false" />
-    <!--视频、录音权限                   请求音频捕获权限 -->
-    <uses-permission android:name="android.permission.RECORD_VIDEO"/>
-    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 
     <application
         android:allowBackup="true"
@@ -30,10 +27,11 @@
             <!--android:screenOrientation="landscape">-->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity android:name=".LoginActivity"></activity>
     </application>
 
 </manifest>

@@ -4,8 +4,8 @@ android {
     compileSdkVersion 25
     defaultConfig {
         applicationId "com.example.entranceguard2"
-        minSdkVersion 15
-        targetSdkVersion 23
+        minSdkVersion 21
+        targetSdkVersion 25
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
@@ -26,4 +26,5 @@ dependencies {
     testImplementation 'junit:junit:4.12'
     androidTestImplementation 'com.android.support.test:runner:0.5'
     androidTestImplementation 'com.android.support.test.espresso:espresso-core:2.2.2'
+    implementation files('libs/opencv library - 3.1.0.jar')
 }
